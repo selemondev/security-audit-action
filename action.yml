@@ -1,0 +1,156 @@
+name: Copilot security audit
+description: Runs Cloudflare's security-audit skill with GitHub Copilot CLI and fails the check on confirmed vulnerabilities.
+author: selemondev
+branding:
+  icon: shield
+  color: orange
+
+inputs:
+  mode:
+    description: "auto, diff or full. auto audits the pushed diff and runs a full audit on schedule and workflow_dispatch events."
+    required: false
+    default: auto
+  fail-on:
+    description: "Lowest confirmed severity that fails the check: critical, high, medium, low, informational or none."
+    required: false
+    default: high
+  model:
+    description: Copilot model ID. Empty uses the Copilot default.
+    required: false
+    default: ""
+  reasoning-effort:
+    description: "Copilot reasoning effort: low, medium, high, xhigh or max."
+    required: false
+    default: high
+  diff-max-ai-credits:
+    description: AI credit cap for a diff audit (1 credit = 0.01 USD, minimum 30).
+    required: false
+    default: "300"
+  full-max-ai-credits:
+    description: AI credit cap for a full audit (1 credit = 0.01 USD, minimum 30).
+    required: false
+    default: "2000"
+  skill-ref:
+    description: Commit of cloudflare/security-audit-skill to run.
+    required: false
+    default: c1c8a8c1471069fb0e188eeaff69b8e8db6564a8
+  copilot-version:
+    description: "@github/copilot npm version."
+    required: false
+    default: latest
+  github-token:
+    description: Token with the copilot-requests permission.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  mode:
+    description: diff, full or skipped.
+    value: ${{ steps.scope.outputs.mode }}
+  confirmed:
+    description: Number of confirmed findings.
+    value: ${{ steps.report.outputs.confirmed }}
+  failing:
+    description: Number of confirmed findings at or above fail-on.
+    value: ${{ steps.report.outputs.failing }}
+  highest-severity:
+    description: Highest confirmed severity, or none.
+    value: ${{ steps.report.outputs.highest-severity }}
+  report-dir:
+    description: Directory holding findings.json, REPORT.md and the coverage ledger.
+    value: ${{ steps.scope.outputs.run-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve audit scope
+      id: scope
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        EVENT_NAME: ${{ github.event_name }}
+        BEFORE_SHA: ${{ github.event.before }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: '"$GITHUB_ACTION_PATH/scripts/scope.sh"'
+
+    - name: Restore previous full audit
+      if: steps.scope.outputs.mode != 'skipped'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.scope.outputs.runs-root }}
+        key: security-audit-runs-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: security-audit-runs-
+
+    - name: Set up Node.js
+      if: steps.scope.outputs.mode != 'skipped'
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24
+
+    - name: Install Copilot CLI and the security-audit skill
+      id: install
+      if: steps.scope.outputs.mode != 'skipped'
+      shell: bash
+      env:
+        SKILL_REF: ${{ inputs.skill-ref }}
+        COPILOT_VERSION: ${{ inputs.copilot-version }}
+      run: '"$GITHUB_ACTION_PATH/scripts/install.sh"'
+
+    - name: Run security audit
+      id: audit
+      if: steps.scope.outputs.mode != 'skipped'
+      shell: bash
+      env:
+        COPILOT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        MODE: ${{ steps.scope.outputs.mode }}
+        BASE_SHA: ${{ steps.scope.outputs.base }}
+        CHANGED_FILES: ${{ steps.scope.outputs.changed-files }}
+        RUN_DIR: ${{ steps.scope.outputs.run-dir }}
+        RUNS_ROOT: ${{ steps.scope.outputs.runs-root }}
+        LOG_DIR: ${{ steps.scope.outputs.log-dir }}
+        SKILL_DIR: ${{ steps.install.outputs.skill-dir }}
+        MODEL: ${{ inputs.model }}
+        REASONING_EFFORT: ${{ inputs.reasoning-effort }}
+        DIFF_MAX_AI_CREDITS: ${{ inputs.diff-max-ai-credits }}
+        FULL_MAX_AI_CREDITS: ${{ inputs.full-max-ai-credits }}
+      run: '"$GITHUB_ACTION_PATH/scripts/run-audit.sh"'
+
+    - name: Check findings
+      id: report
+      if: always() && steps.audit.conclusion != 'skipped' && steps.scope.outputs.mode != 'skipped'
+      shell: bash
+      env:
+        RUN_DIR: ${{ steps.scope.outputs.run-dir }}
+        SKILL_DIR: ${{ steps.install.outputs.skill-dir }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        MODE: ${{ steps.scope.outputs.mode }}
+        BASE_SHA: ${{ steps.scope.outputs.base }}
+        USAGE_FILE: ${{ steps.scope.outputs.log-dir }}/usage.json
+      run: node "$GITHUB_ACTION_PATH/scripts/report.mjs"
+
+    - name: Upload audit report
+      if: always() && steps.scope.outputs.mode != 'skipped'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: security-audit-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          ${{ steps.scope.outputs.run-dir }}
+          ${{ steps.scope.outputs.log-dir }}
+        if-no-files-found: ignore
+        retention-days: 30
+
+    - name: Keep only this full audit as the prior run
+      if: always() && steps.scope.outputs.mode == 'full' && steps.audit.outcome == 'success'
+      shell: bash
+      env:
+        RUN_DIR: ${{ steps.scope.outputs.run-dir }}
+        RUNS_ROOT: ${{ steps.scope.outputs.runs-root }}
+      run: find "$RUNS_ROOT" -mindepth 1 -maxdepth 1 ! -path "$RUN_DIR" -exec rm -rf {} +
+
+    - name: Save full audit for later runs
+      if: always() && steps.scope.outputs.mode == 'full' && steps.audit.outcome == 'success'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.scope.outputs.runs-root }}
+        key: security-audit-runs-${{ github.run_id }}-${{ github.run_attempt }}

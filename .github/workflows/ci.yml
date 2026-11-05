@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Fetch the pinned security-audit skill
+        run: |
+          ref="$(grep -A3 '^  skill-ref:' action.yml | sed -n 's/^    default: //p')"
+          git init --quiet "$RUNNER_TEMP/skill"
+          git -C "$RUNNER_TEMP/skill" fetch --quiet --depth 1 https://github.com/cloudflare/security-audit-skill "$ref"
+          git -C "$RUNNER_TEMP/skill" checkout --quiet FETCH_HEAD
+
+      - name: Shellcheck
+        run: shellcheck scripts/*.sh
+
+      - name: Test the findings gate
+        env:
+          SKILL_DIR: ${{ runner.temp }}/skill/skills/security-audit
+        run: node --test 'test/*.test.mjs'

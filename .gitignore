@@ -1,0 +1,5 @@
+node_modules/
+.agents/
+.claude/
+AGENTS.md
+CLAUDE.md
