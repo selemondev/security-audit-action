@@ -17,7 +17,7 @@ The workflow signs in to Copilot with the job's `GITHUB_TOKEN`; no secret is nee
 | `schedule` (Mondays 03:17 UTC) | Whole repository | `standard` | 2000 (20 USD) |
 | `workflow_dispatch` | Whole repository | `standard` | 2000 (20 USD) |
 
-A diff audit of a two-file push used 87 AI credits (0.87 USD) in a measured run.
+On a small Express app, a sandboxed diff audit of a three-file push used 131 AI credits (1.31 USD) in 7 minutes, and a full audit used 184 AI credits (1.84 USD) in 10 minutes.
 
 A push that only deletes files skips the audit. A push to a new branch audits the commits since it left the default branch.
 
