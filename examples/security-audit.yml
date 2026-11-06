@@ -23,4 +23,4 @@ jobs:
           persist-credentials: false
 
       - name: Audit with Copilot
-        uses: selemondev/security-audit-action@v1
+        uses: selemondev/security-audit-action@v1.1.1
