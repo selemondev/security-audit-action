@@ -36,7 +36,7 @@ done
 rm -rf "$deps_dir" "$target_source"
 mkdir -p "$deps_dir" "$target_source"
 git -C "$GITHUB_WORKSPACE" ls-files -z --cached \
-  | tar --create --null --files-from=- --directory="$GITHUB_WORKSPACE" --exclude=.git --ignore-failed-read --no-recursion --file=- \
+  | tar --create --file=- --directory="$GITHUB_WORKSPACE" --no-recursion --ignore-failed-read --null --files-from=- \
   | tar --extract --directory="$target_source" --file=-
 
 {
