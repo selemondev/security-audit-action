@@ -30,7 +30,7 @@ done
 name="security-audit-install-$$-$RANDOM"
 status=0
 timeout --kill-after=10 "$((timeout_s + 60))" \
-  docker run --rm --init --name "$name" \
+  docker run --rm --name "$name" \
   --read-only \
   --tmpfs /tmp \
   --cap-drop ALL \

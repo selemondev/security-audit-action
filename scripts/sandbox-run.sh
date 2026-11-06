@@ -97,7 +97,7 @@ if [[ -n "$deps_dir" && -d "$deps_dir/venv" ]]; then env_args+=(--env "VIRTUAL_E
 name="security-audit-sandbox-$agent_id-$$-$RANDOM"
 status=0
 timeout --kill-after=10 "$((timeout_s + 30))" \
-  docker run --rm --init --name "$name" \
+  docker run --rm --name "$name" \
   --label "security-audit.scratch=$real_scratch" \
   --network none \
   --read-only \

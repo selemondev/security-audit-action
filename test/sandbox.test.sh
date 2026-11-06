@@ -24,7 +24,10 @@ expect_failure() {
   local name="$1" got=0
   shift
   "$@" >"$work/out" 2>&1 || got=$?
-  if [[ "$got" -ne 0 ]]; then pass "$name"; else
+  if grep -q "Error response from daemon" "$work/out"; then
+    fail "$name (the container did not start)"
+    cat "$work/out"
+  elif [[ "$got" -ne 0 ]]; then pass "$name"; else
     fail "$name (exit 0)"
     cat "$work/out"
   fi
