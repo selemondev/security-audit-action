@@ -57,7 +57,15 @@ def walk(root_fd, parts, create):
 
 
 def identity(st):
-    return (st.st_dev, st.st_ino, stat.S_IFMT(st.st_mode), st.st_nlink, st.st_size)
+    return (
+        st.st_dev,
+        st.st_ino,
+        stat.S_IFMT(st.st_mode),
+        st.st_nlink,
+        st.st_size,
+        st.st_mtime_ns,
+        st.st_ctime_ns,
+    )
 
 
 def promote(scratch_fd, artifacts_fd, rel, max_bytes, remaining):
@@ -91,7 +99,7 @@ def promote(scratch_fd, artifacts_fd, rel, max_bytes, remaining):
         if read != before.st_size or os.read(src, 1):
             raise Rejected("file size changed while reading")
         if identity(os.fstat(src)) != identity(before):
-            raise Rejected("file identity, type, link count or size changed")
+            raise Rejected("file identity, type, link count, size or timestamps changed")
         data = b"".join(chunks)
     finally:
         os.close(src)
@@ -127,7 +135,7 @@ def promote(scratch_fd, artifacts_fd, rel, max_bytes, remaining):
 def sandbox_running(scratch_path):
     try:
         result = subprocess.run(
-            ["docker", "ps", "--quiet", "--filter", f"label=security-audit.scratch={scratch_path}"],
+            ["docker", "ps", "--all", "--quiet", "--filter", f"label=security-audit.scratch={scratch_path}"],
             capture_output=True,
             text=True,
             check=False,
@@ -170,7 +178,7 @@ def main():
             parser.error(f"{spec}: expected PATH:MAX_BYTES")
         specs.append((path, int(limit)))
 
-    scratch_path = os.path.join(agents_root, args.agent, "scratch")
+    scratch_path = os.path.join(os.path.realpath(agents_root), args.agent, "scratch")
     running = sandbox_running(scratch_path)
     if running is None and os.environ.get("SANDBOX_REQUIRE_DOCKER", "1") == "1":
         return reject_all("cannot confirm the sandbox has exited")

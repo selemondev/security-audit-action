@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -18,12 +19,16 @@ class SandboxPromoteTest(unittest.TestCase):
         self.scratch = self.agent / "scratch"
         self.artifacts = self.agent / "artifacts"
         self.scratch.mkdir(parents=True)
+        self._aux = tempfile.TemporaryDirectory()
+        self.aux = Path(self._aux.name)
 
     def tearDown(self):
         self._tmp.cleanup()
+        self._aux.cleanup()
 
-    def run_promote(self, *files, agent=AGENT, max_total=1_000_000):
+    def run_promote(self, *files, agent=AGENT, max_total=1_000_000, **env_overrides):
         env = dict(os.environ, SANDBOX_AGENTS_ROOT=str(self.root), SANDBOX_REQUIRE_DOCKER="0")
+        env.update(env_overrides)
         return subprocess.run(
             [sys.executable, str(SCRIPT), "--agent", agent, "--max-total", str(max_total), *files],
             env=env,
@@ -32,6 +37,26 @@ class SandboxPromoteTest(unittest.TestCase):
             timeout=20,
             check=False,
         )
+
+    def fake_docker(self, running_label):
+        bin_dir = self.aux / "bin"
+        bin_dir.mkdir()
+        log = self.aux / "docker.log"
+        script = bin_dir / "docker"
+        expected = shlex.quote(f"label=security-audit.scratch={running_label}") if running_label else "''"
+        script.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"$*\" >> {shlex.quote(str(log))}\n"
+            "all=0\nlabel=0\n"
+            'for arg in "$@"; do\n'
+            '  [ "$arg" = "--all" ] && all=1\n'
+            f'  [ "$arg" = {expected} ] && label=1\n'
+            "done\n"
+            '[ "$all" = 1 ] && [ "$label" = 1 ] && echo 0123456789ab\n'
+            "exit 0\n"
+        )
+        script.chmod(0o755)
+        return f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}", log
 
     def result(self, proc, code):
         self.assertEqual(proc.returncode, code, proc.stderr)
@@ -208,18 +233,31 @@ class SandboxPromoteTest(unittest.TestCase):
 
     def test_docker_required_without_docker_refuses(self):
         self.write_scratch("out.txt", b"data")
-        env = dict(os.environ, SANDBOX_AGENTS_ROOT=str(self.root), SANDBOX_REQUIRE_DOCKER="1", PATH=str(self.root))
-        proc = subprocess.run(
-            [sys.executable, str(SCRIPT), "--agent", AGENT, "--max-total", "100", "out.txt:100"],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-        )
-        out = self.result(proc, 1)
+        out = self.result(self.run_promote("out.txt:100", max_total=100, SANDBOX_REQUIRE_DOCKER="1", PATH=str(self.aux)), 1)
         self.assertEqual(out, {"promoted": [], "rejected": [{"path": "*", "reason": "cannot confirm the sandbox has exited"}]})
         self.assertFalse(self.artifacts.exists())
+
+    def test_running_sandbox_refuses_with_realpath_label(self):
+        real = self.aux / "real"
+        (real / AGENT / "scratch").mkdir(parents=True)
+        (real / AGENT / "scratch" / "out.txt").write_bytes(b"data")
+        link = self.aux / "link"
+        os.symlink(real, link)
+        label = os.path.join(os.path.realpath(real), AGENT, "scratch")
+        path, log = self.fake_docker(label)
+        proc = self.run_promote("out.txt:100", SANDBOX_AGENTS_ROOT=str(link), SANDBOX_REQUIRE_DOCKER="1", PATH=path)
+        out = self.result(proc, 1)
+        self.assertEqual(out, {"promoted": [], "rejected": [{"path": "*", "reason": "a sandbox for this scratch is still running"}]})
+        self.assertEqual(log.read_text(), f"ps --all --quiet --filter label=security-audit.scratch={label}\n")
+        self.assertFalse((real / AGENT / "artifacts").exists())
+
+    def test_exited_sandbox_allows_promotion_with_docker_required(self):
+        self.write_scratch("out.txt", b"data")
+        path, log = self.fake_docker(None)
+        out = self.result(self.run_promote("out.txt:100", SANDBOX_REQUIRE_DOCKER="1", PATH=path), 0)
+        self.assertEqual(out, {"promoted": [f"agents/{AGENT}/artifacts/out.txt"], "rejected": []})
+        self.assertEqual((self.artifacts / "out.txt").read_bytes(), b"data")
+        self.assertIn("--all", log.read_text().split())
 
 
 if __name__ == "__main__":
