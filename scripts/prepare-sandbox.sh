@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${GITHUB_OUTPUT:?}" "${RUNNER_TEMP:?}"
+: "${GITHUB_OUTPUT:?}" "${RUNNER_TEMP:?}" "${GITHUB_WORKSPACE:?}"
 tool_cache="${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}"
 deps_dir="$RUNNER_TEMP/security-audit-deps"
+target_source="$RUNNER_TEMP/security-audit-target"
 
 unavailable() {
   echo "::warning title=security-audit::No sandbox: $1. The audit reads source only and cannot confirm findings that need execution."
@@ -32,12 +33,18 @@ for entry in "${entries[@]}"; do
   esac
 done
 
-mkdir -p "$deps_dir"
+rm -rf "$deps_dir" "$target_source"
+mkdir -p "$deps_dir" "$target_source"
+git -C "$GITHUB_WORKSPACE" ls-files -z --cached \
+  | tar --create --null --files-from=- --directory="$GITHUB_WORKSPACE" --exclude=.git --ignore-failed-read --no-recursion --file=- \
+  | tar --extract --directory="$target_source" --file=-
+
 {
   echo "available=true"
   echo "image=$image"
   echo "path=$sandbox_path"
   echo "deps-dir=$deps_dir"
   echo "tool-cache=$tool_cache"
+  echo "target-source=$target_source"
 } >>"$GITHUB_OUTPUT"
 echo "Sandbox image: $image"

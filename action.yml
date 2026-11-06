@@ -119,6 +119,7 @@ runs:
         SANDBOX_IMAGE: ${{ steps.sandbox.outputs.image }}
         SANDBOX_PATH: ${{ steps.sandbox.outputs.path }}
         SANDBOX_TOOL_CACHE: ${{ steps.sandbox.outputs.tool-cache }}
+        SANDBOX_TARGET_SOURCE: ${{ steps.sandbox.outputs.target-source }}
         INSTALL_COMMAND: ${{ inputs.install-command }}
       run: '"$GITHUB_ACTION_PATH/scripts/install-deps.sh"'
 
@@ -143,9 +144,11 @@ runs:
         SANDBOX_PATH: ${{ steps.sandbox.outputs.path }}
         SANDBOX_DEPS_DIR: ${{ steps.sandbox.outputs.deps-dir }}
         SANDBOX_TOOL_CACHE: ${{ steps.sandbox.outputs.tool-cache }}
+        SANDBOX_TARGET_SOURCE: ${{ steps.sandbox.outputs.target-source }}
       run: '"$GITHUB_ACTION_PATH/scripts/run-audit.sh"'
 
     - name: Discard sandbox scratch
+      id: discard
       if: always() && steps.audit.conclusion != 'skipped' && steps.scope.outputs.mode != 'skipped'
       shell: bash
       env:
@@ -173,11 +176,12 @@ runs:
         path: |
           ${{ steps.scope.outputs.run-dir }}
           ${{ steps.scope.outputs.log-dir }}
+          !${{ steps.scope.outputs.run-dir }}/agents/*/scratch
         if-no-files-found: ignore
         retention-days: 30
 
     - name: Keep only this full audit as the prior run
-      if: always() && steps.scope.outputs.mode == 'full' && steps.audit.outcome == 'success'
+      if: always() && steps.scope.outputs.mode == 'full' && steps.audit.outcome == 'success' && steps.discard.outcome == 'success'
       shell: bash
       env:
         RUN_DIR: ${{ steps.scope.outputs.run-dir }}
@@ -185,8 +189,15 @@ runs:
       run: find "$RUNS_ROOT" -mindepth 1 -maxdepth 1 ! -path "$RUN_DIR" -exec rm -rf {} +
 
     - name: Save full audit for later runs
-      if: always() && steps.scope.outputs.mode == 'full' && steps.audit.outcome == 'success'
+      if: always() && steps.scope.outputs.mode == 'full' && steps.audit.outcome == 'success' && steps.discard.outcome == 'success'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.scope.outputs.runs-root }}
         key: security-audit-runs-${{ github.run_id }}-${{ github.run_attempt }}
+
+    - name: Unmount sandbox scratch disk
+      if: always() && steps.scope.outputs.mode != 'skipped'
+      shell: bash
+      env:
+        RUN_DIR: ${{ steps.scope.outputs.run-dir }}
+      run: if mountpoint -q "$RUN_DIR/agents" 2>/dev/null; then sudo -n umount "$RUN_DIR/agents"; fi

@@ -33,39 +33,49 @@ expect_failure() {
   fi
 }
 
-export GITHUB_OUTPUT="$work/prepare-output"
-"$repo/scripts/prepare-sandbox.sh"
-output() { sed -n "s/^$1=//p" "$GITHUB_OUTPUT"; }
-if [[ "$(output available)" != true ]]; then
-  echo "prepare-sandbox reported no sandbox: $(output reason)"
-  exit 1
-fi
-export SANDBOX_IMAGE SANDBOX_PATH SANDBOX_DEPS_DIR SANDBOX_TOOL_CACHE
-SANDBOX_IMAGE="$(output image)"
-SANDBOX_PATH="$(output path)"
-SANDBOX_DEPS_DIR="$(output deps-dir)"
-SANDBOX_TOOL_CACHE="$(output tool-cache)"
-
 target="$work/target"
 cp -R "$repo/test/fixtures/npm-app" "$target"
 git -C "$target" init --quiet
 git -C "$target" -c user.name=t -c user.email=t@example.com add .
 git -C "$target" -c user.name=t -c user.email=t@example.com commit --quiet -m fixture
 git -C "$target" config http.https://github.com/.extraheader "AUTHORIZATION: basic c2VjcmV0"
+git init --quiet "$target/lib"
+git -C "$target/lib" config http.https://github.com/.extraheader "AUTHORIZATION: basic c2VjcmV0"
+echo '{"token":"secret"}' >"$target/gha-creds-test.json"
+
+export GITHUB_OUTPUT="$work/prepare-output" GITHUB_WORKSPACE="$target"
+"$repo/scripts/prepare-sandbox.sh"
+output() { sed -n "s/^$1=//p" "$GITHUB_OUTPUT"; }
+if [[ "$(output available)" != true ]]; then
+  echo "prepare-sandbox reported no sandbox: $(output reason)"
+  exit 1
+fi
+export SANDBOX_IMAGE SANDBOX_PATH SANDBOX_DEPS_DIR SANDBOX_TOOL_CACHE SANDBOX_TARGET_SOURCE
+SANDBOX_IMAGE="$(output image)"
+SANDBOX_PATH="$(output path)"
+SANDBOX_DEPS_DIR="$(output deps-dir)"
+SANDBOX_TOOL_CACHE="$(output tool-cache)"
+SANDBOX_TARGET_SOURCE="$(output target-source)"
 
 export SECRET_PROBE=leaked
-GITHUB_WORKSPACE="$target" GITHUB_ACTION_PATH="$repo" DEPS_DIR="$SANDBOX_DEPS_DIR" \
-  "$repo/scripts/install-deps.sh"
+GITHUB_ACTION_PATH="$repo" DEPS_DIR="$SANDBOX_DEPS_DIR" "$repo/scripts/install-deps.sh"
 
-if [[ -f "$target/node_modules/ms/package.json" ]]; then pass "install-deps installs the lockfile"; else fail "install-deps installs the lockfile"; fi
-if [[ -f "$target/install-probe.json" ]]; then
-  if grep -q SECRET_PROBE "$target/install-probe.json"; then fail "install env excludes host variables"; else pass "install env excludes host variables"; fi
-  if grep -q '"gitConfig":false' "$target/install-probe.json"; then pass "install hides .git"; else fail "install hides .git"; fi
+probe="$SANDBOX_TARGET_SOURCE/install-probe.json"
+if [[ -f "$SANDBOX_TARGET_SOURCE/node_modules/ms/package.json" ]]; then pass "install-deps installs the lockfile"; else fail "install-deps installs the lockfile"; fi
+if [[ -f "$probe" ]]; then
+  if grep -q SECRET_PROBE "$probe"; then fail "install env excludes host variables"; else pass "install env excludes host variables"; fi
+  if grep -q '"credentials":\[\]' "$probe"; then pass "install sees no .git or credential files"; else
+    fail "install sees no .git or credential files"
+    cat "$probe"
+  fi
 else
   fail "postinstall ran inside the install container"
 fi
-if [[ "$(cat "$target/tracked.txt")" == original ]]; then pass "tracked files restored after install"; else fail "tracked files restored after install"; fi
-if git -C "$target" config --get http.https://github.com/.extraheader >/dev/null; then pass "host .git untouched"; else fail "host .git untouched"; fi
+if [[ ! -e "$target/node_modules" && ! -e "$target/install-probe.json" && "$(cat "$target/tracked.txt")" == original ]]; then
+  pass "checked-out repository unchanged by install"
+else
+  fail "checked-out repository unchanged by install"
+fi
 
 run_dir="$work/run"
 export SANDBOX_TARGET="$target" SANDBOX_AGENTS_ROOT="$run_dir/agents"
@@ -78,7 +88,7 @@ sandbox=("$repo/scripts/sandbox-run.sh" --scratch "$scratch" --timeout 60 --)
 expect_status 0 "target dependencies load read-only" "${sandbox[@]}" node -e "require('$target/node_modules/ms')"
 # shellcheck disable=SC2016
 expect_status 0 "host variables are absent" "${sandbox[@]}" sh -c '[ -z "${SECRET_PROBE:-}" ] && [ -z "${GITHUB_TOKEN:-}" ]'
-expect_status 0 ".git is hidden" "${sandbox[@]}" sh -c "[ ! -e '$target/.git/config' ]"
+expect_status 0 ".git and untracked credentials are absent" "${sandbox[@]}" sh -c "[ ! -e '$target/.git' ] && [ ! -e '$target/lib/.git/config' ] && [ ! -e '$target/gha-creds-test.json' ]"
 expect_failure "target is read-only" "${sandbox[@]}" touch "$target/written"
 expect_failure "toolchain is read-only" "${sandbox[@]}" touch /usr/written
 expect_failure "root filesystem is read-only" "${sandbox[@]}" touch /written
@@ -117,8 +127,13 @@ wait "$runner_pid" || true
 expect_status 0 "promotion copies evidence" "$repo/scripts/sandbox-promote.py" --agent probe --max-total 100 out.txt:100
 if [[ "$(cat "$SANDBOX_AGENTS_ROOT/probe/artifacts/out.txt" 2>/dev/null)" == evidence ]]; then pass "promoted bytes match"; else fail "promoted bytes match"; fi
 
-RUN_DIR="$run_dir" "$repo/scripts/discard-scratch.sh"
+victim="$work/victim"
+echo keep >"$victim"
+chmod 0400 "$victim"
+expect_status 0 "target code can lock its scratch" "${sandbox[@]}" sh -c "mkdir -p deep && ln -s /proc/self/environ deep/env && ln -s '$victim' leak && chmod 0555 deep ."
+expect_status 0 "discard removes a locked scratch" env RUN_DIR="$run_dir" "$repo/scripts/discard-scratch.sh"
 if [[ ! -e "$scratch" && -f "$SANDBOX_AGENTS_ROOT/probe/artifacts/out.txt" ]]; then pass "discard keeps artifacts and removes scratch"; else fail "discard keeps artifacts and removes scratch"; fi
+if [[ "$(stat -c %a "$victim")" == 400 && "$(cat "$victim")" == keep ]]; then pass "discard does not follow symlinks"; else fail "discard does not follow symlinks"; fi
 
 sudo -n umount "$SANDBOX_AGENTS_ROOT"
 echo "$failures failures"

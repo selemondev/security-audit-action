@@ -60,7 +60,7 @@ The latest successful full audit is cached and passed to later runs as a prior r
 
 ## Sandbox
 
-Before the audit, the action installs dependencies in a container with network access, without the job's tokens, environment or home directory, and with the repository's `.git` directory hidden. The install container gets 2 CPUs, 4 GB of memory, 1024 processes and 15 minutes. Tracked files the install changes are restored before the audit.
+Before the audit, the action copies the repository's tracked files, without `.git`, to a separate directory and installs dependencies there. The install runs in a container with network access and the dependencies' install scripts, without the job's tokens, environment or home directory. The install container gets 2 CPUs, 4 GB of memory, 1024 processes, 1 GB per file and 15 minutes. The checked-out repository stays unchanged.
 
 The Copilot agent runs target code only through the `sandbox-run` command, a fresh Docker container for each command:
 
@@ -68,7 +68,7 @@ The Copilot agent runs target code only through the `sandbox-run` command, a fre
 | --- | --- |
 | Network | None except loopback |
 | Environment | Empty |
-| Files | Repository (with `.git` hidden) and toolchain read-only; writes only to the agent's scratch directory |
+| Files | Copy of the repository's tracked files with installed dependencies, and the toolchain, read-only; writes only to the agent's scratch directory |
 | CPU | 2 CPUs |
 | Memory | 1 GB by default, 4 GB max |
 | Processes | 256 |
@@ -77,12 +77,13 @@ The Copilot agent runs target code only through the `sandbox-run` command, a fre
 | Scratch disk | 2 GB, shared by all agents |
 | Time | 120 s per command by default, 600 s max |
 
-The `sandbox-promote` command copies evidence files out of scratch into the report after the container exits, following the skill's artifact promotion procedure. Scratch directories are deleted before the report is uploaded or cached.
+The `sandbox-promote` command copies evidence files out of scratch into the report after the container exits, following the skill's artifact promotion procedure. Scratch directories are deleted before the report is uploaded or cached; a scratch directory that cannot be deleted is left out of the upload and stops the cache save.
 
 The sandbox needs an Ubuntu runner with Docker and passwordless sudo; GitHub-hosted `ubuntu-*` runners have both. On other runners the audit reads source only and logs a warning.
 
 ## Limits
 
 - The sandbox binds target code, not the Copilot agent. The agent itself has a shell on the runner, and the prompt, not the operating system, keeps it from running target code outside `sandbox-run`. That shell has no GitHub or Copilot tokens.
+- Dependency install scripts run with network access, as in any CI install. `install-command: none` turns the install off, and the sandbox then runs without the target's dependencies.
 - The Copilot agent runs without the repository's agent instruction files, without GitHub's built-in MCP servers and without the GitHub token in its shell. URL access is never pre-approved, so the unattended run denies it.
 - A run that reaches its AI credit cap stops before writing `findings.json` and fails the check. A higher cap or a smaller push fixes it.

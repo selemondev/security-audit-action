@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${SANDBOX_TARGET:?}" "${SANDBOX_AGENTS_ROOT:?}" "${SANDBOX_IMAGE:?}" "${SANDBOX_PATH:?}"
+: "${SANDBOX_TARGET:?}" "${SANDBOX_TARGET_SOURCE:?}" "${SANDBOX_AGENTS_ROOT:?}" "${SANDBOX_IMAGE:?}" "${SANDBOX_PATH:?}"
 deps_dir="${SANDBOX_DEPS_DIR:-}"
 tool_cache="${SANDBOX_TOOL_CACHE:-/opt/hostedtoolcache}"
 max_timeout=600
@@ -65,12 +65,9 @@ done
 mounts=(
   --volume /usr:/usr:ro
   --volume /etc/ld.so.cache:/etc/ld.so.cache:ro
-  --volume "$SANDBOX_TARGET:$SANDBOX_TARGET:ro"
+  --volume "$SANDBOX_TARGET_SOURCE:$SANDBOX_TARGET:ro"
   --volume "$real_scratch:$real_scratch:rw"
 )
-if [[ -d "$SANDBOX_TARGET/.git" ]]; then
-  mounts+=(--mount "type=tmpfs,destination=$SANDBOX_TARGET/.git,tmpfs-size=1m,tmpfs-mode=0555")
-fi
 for dir in /etc/alternatives "$tool_cache" "$deps_dir"; do
   if [[ -n "$dir" && -d "$dir" ]]; then mounts+=(--volume "$dir:$dir:ro"); fi
 done
@@ -98,6 +95,7 @@ name="security-audit-sandbox-$agent_id-$$-$RANDOM"
 status=0
 timeout --kill-after=10 "$((timeout_s + 30))" \
   docker run --rm --name "$name" \
+  --log-driver none \
   --label "security-audit.scratch=$real_scratch" \
   --network none \
   --read-only \

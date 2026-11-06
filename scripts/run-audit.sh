@@ -58,7 +58,7 @@ if [[ "$sandbox" == true ]]; then
 It runs COMMAND in a fresh Docker container with these controls:
 - no external network; only an isolated loopback, so a local client and server must start inside the same sandbox-run call;
 - an empty environment from an allowlist (PATH, LANG, CI and tool settings) with HOME, TMPDIR and caches inside the scratch directory;
-- the target, its .git hidden, and the toolchain mounted read-only; the process writes only inside the given scratch directory;
+- the target, as a copy of its tracked files without .git, and the toolchain mounted read-only at the same paths; the process writes only inside the given scratch directory;
 - 2 CPUs, memory 1g by default (at most 4g), 256 processes, 256 MiB per file, 1024 open files, ${scratch_size} of scratch disk shared by all agents, and wall clock 120 s by default (at most 600 s).
 The working directory is the scratch directory. Dependencies from the target's lockfile are already installed (node_modules in the target, a Python virtualenv and Go module cache under ${SANDBOX_DEPS_DIR:-the deps directory}); the sandbox cannot download more. When a check must write beside source, first copy the needed source into the agent's scratch directory. Record the exact sandbox-run command and limits in the evidence.
 

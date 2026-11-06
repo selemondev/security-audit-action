@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${GITHUB_WORKSPACE:?}" "${GITHUB_ACTION_PATH:?}" "${DEPS_DIR:?}" "${SANDBOX_IMAGE:?}" "${SANDBOX_PATH:?}"
+: "${GITHUB_WORKSPACE:?}" "${GITHUB_ACTION_PATH:?}" "${DEPS_DIR:?}" "${SANDBOX_IMAGE:?}" "${SANDBOX_PATH:?}" "${SANDBOX_TARGET_SOURCE:?}"
 install_command="${INSTALL_COMMAND:-auto}"
 tool_cache="${SANDBOX_TOOL_CACHE:-/opt/hostedtoolcache}"
 timeout_s=900
@@ -17,12 +17,9 @@ mounts=(
   --volume /etc/ld.so.cache:/etc/ld.so.cache:ro
   --volume /etc/ssl:/etc/ssl:ro
   --volume "$GITHUB_ACTION_PATH/scripts:/security-audit-scripts:ro"
-  --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:rw"
+  --volume "$SANDBOX_TARGET_SOURCE:$GITHUB_WORKSPACE:rw"
   --volume "$DEPS_DIR:$DEPS_DIR:rw"
 )
-if [[ -d "$GITHUB_WORKSPACE/.git" ]]; then
-  mounts+=(--mount "type=tmpfs,destination=$GITHUB_WORKSPACE/.git")
-fi
 for dir in /etc/alternatives "$tool_cache"; do
   if [[ -d "$dir" ]]; then mounts+=(--volume "$dir:$dir:ro"); fi
 done
@@ -31,6 +28,7 @@ name="security-audit-install-$$-$RANDOM"
 status=0
 timeout --kill-after=10 "$((timeout_s + 60))" \
   docker run --rm --name "$name" \
+  --log-driver none \
   --read-only \
   --tmpfs /tmp \
   --cap-drop ALL \
@@ -38,6 +36,8 @@ timeout --kill-after=10 "$((timeout_s + 60))" \
   --cpus 2 \
   --memory 4g --memory-swap 4g \
   --pids-limit 1024 \
+  --ulimit fsize=1073741824:1073741824 \
+  --ulimit core=0 \
   --user "$(id -u):$(id -g)" \
   --workdir "$GITHUB_WORKSPACE" \
   "${mounts[@]}" \
@@ -60,10 +60,4 @@ timeout --kill-after=10 "$((timeout_s + 60))" \
 docker rm --force "$name" >/dev/null 2>&1 || true
 if [[ "$status" -ne 0 ]]; then
   echo "::warning title=security-audit::The dependency install container exited with $status; the audit continues with the dependencies that installed."
-fi
-
-changed="$(git -C "$GITHUB_WORKSPACE" diff --name-only)"
-if [[ -n "$changed" ]]; then
-  echo "::warning title=security-audit::The dependency install changed tracked files; they were restored before the audit: $(tr '\n' ' ' <<<"$changed")"
-  git -C "$GITHUB_WORKSPACE" checkout --quiet -- .
 fi
