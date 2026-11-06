@@ -1,0 +1,10 @@
+{
+  "name": "sandbox-fixture",
+  "private": true,
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "dependencies": {
+    "ms": "2.1.3"
+  }
+}

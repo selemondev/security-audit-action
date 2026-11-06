@@ -38,6 +38,14 @@ inputs:
     description: "@github/copilot npm version."
     required: false
     default: latest
+  sandbox:
+    description: "true runs target code for findings that need execution in a Docker sandbox with no network; false reads source only."
+    required: false
+    default: "true"
+  install-command:
+    description: "auto installs dependencies from the root lockfile before the audit, none skips the install, any other value is the install command. The install runs in a container with network access and without the job's tokens."
+    required: false
+    default: auto
   github-token:
     description: Token with the copilot-requests permission.
     required: false
@@ -97,6 +105,23 @@ runs:
         COPILOT_VERSION: ${{ inputs.copilot-version }}
       run: '"$GITHUB_ACTION_PATH/scripts/install.sh"'
 
+    - name: Prepare the sandbox
+      id: sandbox
+      if: steps.scope.outputs.mode != 'skipped' && inputs.sandbox == 'true'
+      shell: bash
+      run: '"$GITHUB_ACTION_PATH/scripts/prepare-sandbox.sh"'
+
+    - name: Install dependencies
+      if: steps.sandbox.outputs.available == 'true'
+      shell: bash
+      env:
+        DEPS_DIR: ${{ steps.sandbox.outputs.deps-dir }}
+        SANDBOX_IMAGE: ${{ steps.sandbox.outputs.image }}
+        SANDBOX_PATH: ${{ steps.sandbox.outputs.path }}
+        SANDBOX_TOOL_CACHE: ${{ steps.sandbox.outputs.tool-cache }}
+        INSTALL_COMMAND: ${{ inputs.install-command }}
+      run: '"$GITHUB_ACTION_PATH/scripts/install-deps.sh"'
+
     - name: Run security audit
       id: audit
       if: steps.scope.outputs.mode != 'skipped'
@@ -114,7 +139,18 @@ runs:
         REASONING_EFFORT: ${{ inputs.reasoning-effort }}
         DIFF_MAX_AI_CREDITS: ${{ inputs.diff-max-ai-credits }}
         FULL_MAX_AI_CREDITS: ${{ inputs.full-max-ai-credits }}
+        SANDBOX_IMAGE: ${{ steps.sandbox.outputs.image }}
+        SANDBOX_PATH: ${{ steps.sandbox.outputs.path }}
+        SANDBOX_DEPS_DIR: ${{ steps.sandbox.outputs.deps-dir }}
+        SANDBOX_TOOL_CACHE: ${{ steps.sandbox.outputs.tool-cache }}
       run: '"$GITHUB_ACTION_PATH/scripts/run-audit.sh"'
+
+    - name: Discard sandbox scratch
+      if: always() && steps.audit.conclusion != 'skipped' && steps.scope.outputs.mode != 'skipped'
+      shell: bash
+      env:
+        RUN_DIR: ${{ steps.scope.outputs.run-dir }}
+      run: '"$GITHUB_ACTION_PATH/scripts/discard-scratch.sh"'
 
     - name: Check findings
       id: report
